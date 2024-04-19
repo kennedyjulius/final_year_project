@@ -1,14 +1,12 @@
 import threading
 import os
 import pickle
+import psutil
 
 from Search import open_drive
 from signatures.Search import openDrive
 
-
-def SearchUsingTrailer(signatures, driveLetter):
-    drive = openDrive()
-
+def SearchUsingTrailer(signatures, file_path):
     print(signatures)
     nCtr = 0
     nMax = 10000000
@@ -18,7 +16,7 @@ def SearchUsingTrailer(signatures, driveLetter):
     startSplice = 0
     endSplice = 1
     MaxSize = 10000000
-    with open("\\\\.\\{}".format(driveLetter), 'rb') as drive:
+    with open(file_path, 'rb') as drive:
         while nCtr < nMax:
             drive.seek(nCtr * sector)
             # Read bytes from the drive
@@ -60,13 +58,28 @@ def main():
         if ask_more != 1:
             break
 
-    drive_letter = input("Enter letter of drive to scan: ").upper()
+    drives = [drive.device for drive in psutil.disk_partitions()]
+    print("Available file partitions:")
+    for drive in drives:
+        print(drive)
+
+    drive_letter = input("Enter the letter of the file partition to scan: ").upper()
+
+    if drive_letter not in drives:
+        print("Invalid file partition letter. Please select a valid file partition.")
+        return
+
+    file_path = input("Enter the full path of the file to scan: ")
+
+    if not os.path.exists(file_path):
+        print("Invalid file path. Please enter a valid file path.")
+        return
 
     # Create a thread for each file type to search concurrently
     threads = []
     for choice in choices:
         if choice in headers:
-            thread = threading.Thread(target=SearchUsingTrailer, args=(headers[choice], drive_letter))
+            thread = threading.Thread(target=SearchUsingTrailer, args=(headers[choice], file_path))
             threads.append(thread)
             thread.start()
         else:

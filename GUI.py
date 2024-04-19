@@ -4,29 +4,53 @@ from tkinter import messagebox
 from tkinter import filedialog
 import threading
 import os
+import psutil
 
 # Import file recovery functions
 from Search import jpg_search, pdf_search, docx_search
+from Carver import SearchUsingTrailer
+
+def create_circle_style():
+    style = ttk.Style()
+    style.theme_use('clam')  # Set theme to 'clam' for a white window
+    style.configure('.', foreground='white', background='white')  # Set text color to black and background to white
+
+    style.layout('CircularProgressbar',
+                 [('CircularProgressbar.trough',
+                   {'children': [('CircularProgressbar.pbar',
+                                  {'side': 'left', 'sticky': 'ns'})],
+                    'sticky': 'nswe'})])
+
+    style.configure('CircularProgressbar', foreground='green', background='white')
+
+    style.configure('CircularProgressbar.pbar', background='green')
+
+class ProgressWindow(tk.Toplevel):
+    def __init__(self, root):
+        super().__init__(root)
+        self.title("Progress")
+        self.geometry("300x100")
+
+        create_circle_style()
+
+        self.progress_bar = ttk.Progressbar(self, mode='indeterminate', style='CircularProgressbar')
+        self.progress_bar.pack(pady=20)
 
 class RecoveryApp:
     def __init__(self, root):
         self.root = root
         self.root.title("File Recovery Tool")
-        self.root.geometry("600x400")  # Set window size
+        self.root.geometry("1200x1200")  # Set window size
 
-        self.drive_letter = 'C:'  # Default drive set to 'C:'
-        self.selected_types = []
+        self.selected_drive = tk.StringVar()
+        self.selected_drive.set('')  # Default drive set to empty
 
         self.label = tk.Label(root, text="Select Drive:")
         self.label.pack(pady=(20, 5))
 
-        vcmd = root.register(self.validate_drive_entry)  # Register validation function
-        self.drive_entry = tk.Entry(root, validate="key", validatecommand=(vcmd, '%P'))  # Apply validation
-        self.drive_entry.pack(pady=5)
-        self.drive_entry.insert(0, self.drive_letter)  # Set default drive in the entry field
-
-        self.select_drive_button = ttk.Button(root, text="Browse Drive", command=self.browse_drive)
-        self.select_drive_button.pack(pady=5)
+        self.drive_menu = ttk.Combobox(root, textvariable=self.selected_drive, state="readonly")
+        self.populate_drive_menu()
+        self.drive_menu.pack(pady=5)
 
         self.label_types = tk.Label(root, text="Select file types to recover:")
         self.label_types.pack(pady=(20, 5))
@@ -45,6 +69,9 @@ class RecoveryApp:
         self.start_recovery_button = ttk.Button(root, text="Start Recovery", command=self.start_recovery)
         self.start_recovery_button.pack(pady=20)
 
+        self.save_button = ttk.Button(root, text="Save Results", command=self.save_results)
+        self.save_button.pack(pady=10)
+
         self.results_label = tk.Label(root, text="Recovered Items:")
         self.results_label.pack()
 
@@ -52,24 +79,23 @@ class RecoveryApp:
         self.results_listbox.pack(expand=True, fill=tk.BOTH, padx=20, pady=10)
         self.results_listbox.bind('<Double-Button-1>', self.open_file)  # Bind double click event to open file
 
-    def validate_drive_entry(self, value):
-        return len(value) <= 1 and value.isalpha()  # Validate input: single character, alphabetic
+    def populate_drive_menu(self):
+        self.selected_drive.set('')  # Clear current drive selection
+        drives = self.get_available_drives()
+        self.drive_menu['values'] = drives
 
-    def browse_drive(self):
-        drive = filedialog.askopenfilename(initialdir='C:/', title="Select System Drive")  # Open file dialog
-        if drive:
-            drive_letter, _ = os.path.splitdrive(drive)
-            if drive_letter:
-                self.drive_letter = drive_letter.upper()  # Extract and convert drive letter to uppercase
-                self.drive_entry.delete(0, tk.END)
-                self.drive_entry.insert(0, self.drive_letter)
-            else:
-                messagebox.showerror("Error", "Please select a valid system drive.")
+    def get_available_drives(self):
+        drives = []
+        for partition in psutil.disk_partitions():
+            drives.append(partition.device)
+        return drives
 
     def start_recovery(self):
         self.results_listbox.delete(0, tk.END)  # Clear previous results
 
-        if not self.drive_letter:
+        selected_drive = self.selected_drive.get()
+
+        if not selected_drive:
             messagebox.showerror("Error", "Please select a drive.")
             return
 
@@ -77,41 +103,67 @@ class RecoveryApp:
             messagebox.showerror("Error", "Please select at least one file type.")
             return
 
-        # Create a thread for each selected file type to search and recover concurrently
-        threads = []
-        if self.check_var_jpg.get():
-            thread = threading.Thread(target=self.recover_files, args=(jpg_search, "jpg"))
-            threads.append(thread)
-            thread.start()
-        if self.check_var_pdf.get():
-            thread = threading.Thread(target=self.recover_files, args=(pdf_search, "pdf"))
-            threads.append(thread)
-            thread.start()
-        if self.check_var_docx.get():
-            thread = threading.Thread(target=self.recover_files, args=(docx_search, "docx"))
-            threads.append(thread)
-            thread.start()
+        progress_window = ProgressWindow(self.root)
+        progress_thread = threading.Thread(target=self.perform_recovery, args=(selected_drive, progress_window))
+        progress_thread.start()
 
-        # Wait for all threads to finish
-        for thread in threads:
-            thread.join()
-
-    def recover_files(self, search_function, file_type):
+    def perform_recovery(self, selected_drive, progress_window):
         try:
-            recovered_files = search_function(self.drive_letter)
+            # Construct the file type choices based on user selection
+            file_types = []
+            if self.check_var_jpg.get():
+                file_types.append('jpg')
+            if self.check_var_pdf.get():
+                file_types.append('pdf')
+            if self.check_var_docx.get():
+                file_types.append('docx')
+
+            # Perform recovery for each selected file type
+            recovered_files = []
+            for file_type in file_types:
+                files = None
+                if file_type == 'jpg':
+                    files = jpg_search(selected_drive)
+                elif file_type == 'pdf':
+                    files = pdf_search(selected_drive)
+                elif file_type == 'docx':
+                    files = docx_search(selected_drive)
+
+                if files:
+                    recovered_files.extend(files)
+
             if not recovered_files:
-                messagebox.showinfo("No Files Found", f"No {file_type.upper()} files found on the drive.")
-            else:
-                for file_path in recovered_files:
-                    self.results_listbox.insert(tk.END, f"{file_type.upper()} - {file_path}")
+                raise FileNotFoundError("No files found during recovery process.")
+
+            for file_path in recovered_files:
+                self.results_listbox.insert(tk.END, file_path)
+
+        except FileNotFoundError as e:
+            messagebox.showerror("File Not Found", str(e))
+            self.restart_program()  # Restart the program if FileNotFoundError occurs
         except Exception as e:
-            self.results_listbox.insert(tk.END, f"{file_type} - Recovery Failed: {e}")
+            messagebox.showerror("Recovery Failed", f"Recovery Failed: {e}")
+            self.restart_program()  # Restart the program if any other exception occurs
+
+        finally:
+            progress_window.destroy()
 
     def open_file(self, event):
         selected_item = self.results_listbox.curselection()
         if selected_item:
-            file_path = self.results_listbox.get(selected_item[0]).split(" - ")[1]
+            file_path = self.results_listbox.get(selected_item[0])
             os.system(f'start {file_path}')  # Open the file using default system program
+
+    def save_results(self):
+        file_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+        if file_path:
+            with open(file_path, "w") as f:
+                for item in self.results_listbox.get(0, tk.END):
+                    f.write(item + "\n")
+
+    def restart_program(self):
+        self.root.destroy()  # Destroy the current window
+        main()  # Restart the program
 
 def main():
     root = tk.Tk()
